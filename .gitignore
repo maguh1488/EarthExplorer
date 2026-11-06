@@ -1,0 +1,7 @@
+# Godot generated data
+.godot/
+*.tmp
+__pycache__/
+*.pyc
+# Imported geodata can be regenerated (and can become huge)
+data/kiel/osm.json

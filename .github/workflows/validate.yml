@@ -1,0 +1,27 @@
+name: Validate prototype
+on:
+  push:
+  pull_request:
+
+jobs:
+  python-importer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s tests -v
+  godot-headless:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download Godot 4.4.1
+        run: |
+          wget -q https://github.com/godotengine/godot/releases/download/4.4.1-stable/Godot_v4.4.1-stable_linux.x86_64.zip -O godot.zip
+          unzip -q godot.zip
+          chmod +x Godot_v4.4.1-stable_linux.x86_64
+      - name: Import project
+        run: ./Godot_v4.4.1-stable_linux.x86_64 --headless --path . --editor --import --quit
+      - name: Smoke-test main scene
+        run: timeout 15s ./Godot_v4.4.1-stable_linux.x86_64 --headless --path . --quit-after 30
