@@ -11,10 +11,13 @@ import json
 import re
 import urllib.parse
 import urllib.request
+import urllib.error
+import time
+import sys
 from pathlib import Path
 
 DEFAULT_BBOX = (54.3208, 10.1359, 54.3258, 10.1429)  # south, west, north, east
-OVERPASS = "https://overpass-api.de/api/interpreter"
+OVERPASS_SERVERS = ("https://overpass.kumi.systems/api/interpreter", "https://overpass-api.de/api/interpreter", "https://overpass.nchc.org.tw/api/interpreter")
 
 def parse_height(tags: dict) -> float:
     raw = tags.get("height", "")
@@ -51,13 +54,25 @@ def import_bbox(bbox: tuple[float, float, float, float]) -> dict:
         f'way["highway"]({south},{west},{north},{east});'
         f');out body;>;out skel qt;'
     )
-    request = urllib.request.Request(
-        OVERPASS, data=urllib.parse.urlencode({"data": query}).encode(),
-        headers={"User-Agent": "EarthExplorer/0.1 (personal OSM prototype)"},
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=90) as response:
-        return json.load(response)
+    errors = []
+    for server in OVERPASS_SERVERS:
+        for attempt in range(2):
+            print(f"Requesting {server} (attempt {attempt + 1}/2)", flush=True)
+            request = urllib.request.Request(server, data=urllib.parse.urlencode({"data": query}).encode(), headers={"User-Agent": "EarthExplorer/0.1 OSM importer"}, method="POST")
+            try:
+                with urllib.request.urlopen(request, timeout=90) as response:
+                    result = json.load(response)
+                if not isinstance(result, dict) or not isinstance(result.get("elements"), list):
+                    raise ValueError("Invalid Overpass response")
+                return result
+            except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+                errors.append(f"{server}: {exc}")
+                print(f"Server unavailable: {exc}", flush=True)
+                if isinstance(exc, urllib.error.HTTPError) and exc.code not in (429, 500, 502, 503, 504):
+                    break
+                if attempt == 0:
+                    time.sleep(2)
+    raise RuntimeError("All Overpass servers failed:\n" + "\n".join(errors))
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Download small Kiel OSM region for Earth Explorer")
@@ -65,11 +80,19 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("data/kiel/osm.json"))
     parser.add_argument("--input", type=Path, help="Read an existing Overpass JSON instead of downloading")
     args = parser.parse_args()
-    source = json.loads(args.input.read_text(encoding="utf-8")) if args.input else import_bbox(tuple(args.bbox))
-    result = convert_osm(source)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(result, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    print(f"Saved {len(result['buildings'])} buildings and {len(result['roads'])} roads to {args.output}")
+    try:
+        source = json.loads(args.input.read_text(encoding="utf-8")) if args.input else import_bbox(tuple(args.bbox))
+        result = convert_osm(source)
+        if not result["buildings"] and not result["roads"]:
+            raise ValueError("No buildings or roads found; existing data preserved")
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        temp = args.output.with_suffix(".json.tmp")
+        temp.write_text(json.dumps(result, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        temp.replace(args.output)
+        print(f"Saved {len(result['buildings'])} buildings and {len(result['roads'])} roads to {args.output}")
+    except (RuntimeError, ValueError, OSError, json.JSONDecodeError) as exc:
+        print(f"Import failed: {exc}. Existing data preserved.", file=sys.stderr)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
