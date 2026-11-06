@@ -56,11 +56,11 @@ def import_bbox(bbox: tuple[float, float, float, float]) -> dict:
     )
     errors = []
     for server in OVERPASS_SERVERS:
-        for attempt in range(2):
-            print(f"Requesting {server} (attempt {attempt + 1}/2)", flush=True)
+        for attempt in range(1):
+            print(f"Requesting {server} (timeout 15s)", flush=True)
             request = urllib.request.Request(server, data=urllib.parse.urlencode({"data": query}).encode(), headers={"User-Agent": "EarthExplorer/0.1 OSM importer"}, method="POST")
             try:
-                with urllib.request.urlopen(request, timeout=90) as response:
+                with urllib.request.urlopen(request, timeout=15) as response:
                     result = json.load(response)
                 if not isinstance(result, dict) or not isinstance(result.get("elements"), list):
                     raise ValueError("Invalid Overpass response")
@@ -70,8 +70,6 @@ def import_bbox(bbox: tuple[float, float, float, float]) -> dict:
                 print(f"Server unavailable: {exc}", flush=True)
                 if isinstance(exc, urllib.error.HTTPError) and exc.code not in (429, 500, 502, 503, 504):
                     break
-                if attempt == 0:
-                    time.sleep(2)
     raise RuntimeError("All Overpass servers failed:\n" + "\n".join(errors))
 
 def main() -> None:
