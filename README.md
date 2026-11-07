@@ -9,3 +9,15 @@ Open-data 3D world explorer built with Godot 4. Start in Kiel, import OpenStreet
 3. WASD move, mouse look, Space jump, Shift sprint, F fly/walk, Q/E descend/ascend while flying, F3 debug, F11 fullscreen, Esc capture/release mouse.
 
 The initial prototype uses a **flat ground** and extruded OSM building footprints, not yet elevation/satellite imagery. Real height terrain, streaming and detailed roads are future milestones. OSM attribution: © OpenStreetMap contributors (ODbL), https://www.openstreetmap.org/copyright.
+
+## Terrain grid (experimental)
+
+Optional `data/kiel/terrain.json` is a **local height grid**, not a downloaded DEM. Example:
+
+```json
+{"width":3,"depth":3,"step_m":10,"heights":[0,0,0,0,1,0,0,0,0]}
+```
+
+Heights are row-major metres, X increasing east, Z increasing south; the grid is centred at the project's Kiel origin. Without this file, the existing flat ground remains. Terrain meshes have static collision. **Known limitation:** Buildings and roads are still placed at Y=0, so non-flat terrain may overlap them. Actual georeferenced DEM ingestion and draping buildings/roads over terrain are not implemented yet. This format is a rendering/collision pipeline milestone, not real elevation data.
+
+Chunk culling currently hides distant geometry and disables its physics processing; geometry is still kept in memory.
