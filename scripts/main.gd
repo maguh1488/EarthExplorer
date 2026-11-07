@@ -15,6 +15,11 @@ var first_building_position := Vector3.ZERO
 var world_bounds := Rect2()
 var roof_count := 0
 var has_building := false
+const CHUNK_SIZE := 256.0
+const VISIBLE_RADIUS := 2
+var chunk_nodes: Dictionary = {}
+var last_chunk := Vector2i(999999, 999999)
+var visible_chunks := 0
 
 func _ready() -> void:
     _setup_lighting()
@@ -32,6 +37,7 @@ func _ready() -> void:
     else:
         _demo()
     _reset_camera()
+    _update_chunks(true)
 
 func _reset_camera() -> void:
     if has_building:
@@ -54,12 +60,13 @@ func _unhandled_input(event: InputEvent) -> void:
             DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED if mode == DisplayServer.WINDOW_MODE_FULLSCREEN else DisplayServer.WINDOW_MODE_FULLSCREEN)
 
 func _process(_delta: float) -> void:
+    _update_chunks()
     hud.visible = show_debug
     if show_debug:
         var p := player.global_position
         var lat := ORIGIN_LAT - p.z / METERS_PER_DEGREE
         var lon := ORIGIN_LON + p.x / (METERS_PER_DEGREE * cos(deg_to_rad(ORIGIN_LAT)))
-        hud.text = "EARTH EXPLORER 0.1 | %s\nFPS %d   Buildings %d   Roofs %d   Roads %d\nXYZ %.1f / %.1f / %.1f m\nGPS %.6f, %.6f\n%s\nWASD move · Mouse look · Shift fast · F fly/walk · Q/E altitude · Space jump/up · F3 HUD · Home reset · Wheel speed · F11 fullscreen · Esc mouse" % [source_label, Engine.get_frames_per_second(), building_count, roof_count, road_count, p.x, p.y, p.z, lat, lon, "FLY MODE" if player.flying else "WALK MODE"]
+        hud.text = "EARTH EXPLORER 0.1 | %s\nFPS %d   Buildings %d   Roofs %d   Roads %d   Chunks %d/%d\nXYZ %.1f / %.1f / %.1f m\nGPS %.6f, %.6f\n%s\nWASD move · Mouse look · Shift fast · F fly/walk · Q/E altitude · Space jump/up · F3 HUD · Home reset · Wheel speed · F11 fullscreen · Esc mouse" % [source_label, Engine.get_frames_per_second(), building_count, roof_count, road_count, visible_chunks, chunk_nodes.size(), p.x, p.y, p.z, lat, lon, "FLY MODE" if player.flying else "WALK MODE"]
 
 func _geo(lon: float, lat: float) -> Vector3:
     return Vector3((lon - ORIGIN_LON) * METERS_PER_DEGREE * cos(deg_to_rad(ORIGIN_LAT)), 0.0, -(lat - ORIGIN_LAT) * METERS_PER_DEGREE)
@@ -85,11 +92,41 @@ func _material(color: Color) -> StandardMaterial3D:
     mat.roughness = 1.0
     return mat
 
+func _chunk_id(pos: Vector3) -> Vector2i:
+    return Vector2i(floori(pos.x / CHUNK_SIZE), floori(pos.z / CHUNK_SIZE))
+
+func _chunk_parent(pos: Vector3) -> Node3D:
+    var id := _chunk_id(pos)
+    if not chunk_nodes.has(id):
+        var node := Node3D.new()
+        node.name = "Chunk_%d_%d" % [id.x, id.y]
+        add_child(node)
+        chunk_nodes[id] = node
+    return chunk_nodes[id]
+
+func _update_chunks(force := false) -> void:
+    if player == null:
+        return
+    var current := _chunk_id(player.global_position)
+    if not force and current == last_chunk:
+        return
+    last_chunk = current
+    visible_chunks = 0
+    for id in chunk_nodes:
+        var enabled: bool = maxi(abs(id.x - current.x), abs(id.y - current.y)) <= VISIBLE_RADIUS
+        var node: Node3D = chunk_nodes[id]
+        node.visible = enabled
+        if enabled:
+            visible_chunks += 1
+
 func _box(parent: Node3D, center: Vector3, size: Vector3, color: Color, collision := false, angle := 0.0) -> void:
     var root := Node3D.new()
     root.position = center
     root.rotation.y = angle
-    parent.add_child(root)
+    if parent == self:
+        _chunk_parent(center).add_child(root)
+    else:
+        parent.add_child(root)
     var mesh := MeshInstance3D.new()
     var box := BoxMesh.new()
     box.size = size
@@ -106,7 +143,10 @@ func _box(parent: Node3D, center: Vector3, size: Vector3, color: Color, collisio
         body.add_child(shape)
 
 func _create_ground() -> void:
-    _box(self, Vector3(0, -0.5, 0), Vector3(1800, 1, 1800), Color(0.3, 0.47, 0.31), true)
+    var ground := Node3D.new()
+    ground.name = "PermanentGround"
+    add_child(ground)
+    _box(ground, Vector3(0, -0.5, 0), Vector3(1800, 1, 1800), Color(0.3, 0.47, 0.31), true)
 
 func _create_player() -> void:
     player = CharacterBody3D.new()
@@ -185,7 +225,7 @@ func _building(points: Array[Vector3], height: float) -> void:
         var roof := MeshInstance3D.new()
         roof.mesh = roof_mesh
         roof.material_override = _material(Color(0.48, 0.29, 0.24))
-        add_child(roof)
+        _chunk_parent(center).add_child(roof)
         roof_count += 1
     for i in range(points.size()):
         _segment(points[i], points[(i + 1) % points.size()], height * 0.5, 0.22, Color(0.79, 0.76, 0.70), true)
