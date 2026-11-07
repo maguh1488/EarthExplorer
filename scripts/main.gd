@@ -95,7 +95,8 @@ func _create_player() -> void:
     player = CharacterBody3D.new()
     player.set_script(PLAYER_SCRIPT)
     add_child(player)
-    player.position = Vector3(0, 28, 0)
+    player.position = Vector3(0, 90, 0)
+    player.pivot.rotation.x = -0.75
 
 func _create_hud() -> void:
     var layer := CanvasLayer.new()
