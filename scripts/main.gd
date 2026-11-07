@@ -12,6 +12,8 @@ var building_count := 0
 var road_count := 0
 var source_label := "Demo / offline"
 var first_building_position := Vector3.ZERO
+var world_bounds := Rect2()
+var roof_count := 0
 var has_building := false
 
 func _ready() -> void:
@@ -29,20 +31,23 @@ func _ready() -> void:
             _demo()
     else:
         _demo()
-    _add_diagnostic_marker()
-    if has_building:
-        player.global_position = first_building_position + Vector3(0, 35, 55)
-        player.rotation.y = 0.0
-        player.pivot.rotation.x = -0.48
+    _reset_camera()
 
-func _add_diagnostic_marker() -> void:
-    # Unmistakable geometry in the camera view; verifies mesh rendering.
-    _box(self, player.global_position + Vector3(0, -15, -25), Vector3(12, 30, 12), Color(1, 0.05, 0.05), true)
-    print("EARTH EXPLORER: diagnostic red tower created; first building=", first_building_position, " loaded=", building_count)
+func _reset_camera() -> void:
+    if has_building:
+        player.global_position = first_building_position + Vector3(0, 75, 105)
+    else:
+        player.global_position = Vector3(0, 75, 105)
+    player.velocity = Vector3.ZERO
+    player.flying = true
+    player.rotation = Vector3.ZERO
+    player.pivot.rotation.x = -0.58
 
 func _unhandled_input(event: InputEvent) -> void:
     if event is InputEventKey and event.pressed and not event.echo:
-        if event.keycode == KEY_F3:
+        if event.keycode == KEY_HOME:
+            _reset_camera()
+        elif event.keycode == KEY_F3:
             show_debug = not show_debug
         elif event.keycode == KEY_F11:
             var mode := DisplayServer.window_get_mode()
@@ -54,7 +59,7 @@ func _process(_delta: float) -> void:
         var p := player.global_position
         var lat := ORIGIN_LAT - p.z / METERS_PER_DEGREE
         var lon := ORIGIN_LON + p.x / (METERS_PER_DEGREE * cos(deg_to_rad(ORIGIN_LAT)))
-        hud.text = "EARTH EXPLORER 0.1 | %s\nFPS %d   Buildings %d   Roads %d\nXYZ %.1f / %.1f / %.1f m\nGPS %.6f, %.6f\n%s\nWASD move · Mouse look · Shift fast · F fly/walk · Q/E altitude · Space jump/up · F3 HUD · F11 fullscreen · Esc mouse" % [source_label, Engine.get_frames_per_second(), building_count, road_count, p.x, p.y, p.z, lat, lon, "FLY MODE" if player.flying else "WALK MODE"]
+        hud.text = "EARTH EXPLORER 0.1 | %s\nFPS %d   Buildings %d   Roofs %d   Roads %d\nXYZ %.1f / %.1f / %.1f m\nGPS %.6f, %.6f\n%s\nWASD move · Mouse look · Shift fast · F fly/walk · Q/E altitude · Space jump/up · F3 HUD · Home reset · Wheel speed · F11 fullscreen · Esc mouse" % [source_label, Engine.get_frames_per_second(), building_count, roof_count, road_count, p.x, p.y, p.z, lat, lon, "FLY MODE" if player.flying else "WALK MODE"]
 
 func _geo(lon: float, lat: float) -> Vector3:
     return Vector3((lon - ORIGIN_LON) * METERS_PER_DEGREE * cos(deg_to_rad(ORIGIN_LAT)), 0.0, -(lat - ORIGIN_LAT) * METERS_PER_DEGREE)
@@ -149,11 +154,43 @@ func _segment(a: Vector3, b: Vector3, y: float, width: float, color: Color, coll
     _box(self, (a + b) * 0.5 + Vector3.UP * y, Vector3(width, 0.12 if not collision else y * 2.0, length), color, collision, atan2(delta.x, delta.z))
 
 func _building(points: Array[Vector3], height: float) -> void:
-    # Wall geometry is robust for concave footprints; roofing comes later.
+    # Extrude real OSM footprints, including concave polygons, and cap with a roof.
+    if points.size() < 3:
+        return
+    var outline := PackedVector2Array()
+    var center := Vector3.ZERO
+    for point in points:
+        outline.append(Vector2(point.x, point.z))
+        center += point
+    center /= float(points.size())
+    # Godot's triangulator requires a simple polygon. Invalid footprints keep their walls.
+    var triangles := Geometry2D.triangulate_polygon(outline)
+    if triangles.size() >= 3:
+        var vertices := PackedVector3Array()
+        var indices := PackedInt32Array()
+        for point in points:
+            vertices.append(Vector3(point.x, height, point.z))
+        for t in range(0, triangles.size(), 3):
+            # Make both sides visible, regardless of polygon winding.
+            var i0 := triangles[t]
+            var i1 := triangles[t + 1]
+            var i2 := triangles[t + 2]
+            indices.append_array(PackedInt32Array([i0, i1, i2, i2, i1, i0]))
+        var arrays := []
+        arrays.resize(Mesh.ARRAY_MAX)
+        arrays[Mesh.ARRAY_VERTEX] = vertices
+        arrays[Mesh.ARRAY_INDEX] = indices
+        var roof_mesh := ArrayMesh.new()
+        roof_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+        var roof := MeshInstance3D.new()
+        roof.mesh = roof_mesh
+        roof.material_override = _material(Color(0.48, 0.29, 0.24))
+        add_child(roof)
+        roof_count += 1
     for i in range(points.size()):
-        _segment(points[i], points[(i + 1) % points.size()], height * 0.5, 0.22, Color(0.78, 0.75, 0.69), true)
+        _segment(points[i], points[(i + 1) % points.size()], height * 0.5, 0.22, Color(0.79, 0.76, 0.70), true)
     if not has_building:
-        first_building_position = points[0]
+        first_building_position = center
         has_building = true
     building_count += 1
 
