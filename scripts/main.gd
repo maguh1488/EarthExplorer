@@ -11,6 +11,8 @@ var show_debug := true
 var building_count := 0
 var road_count := 0
 var source_label := "Demo / offline"
+var first_building_position := Vector3.ZERO
+var has_building := false
 
 func _ready() -> void:
     _setup_lighting()
@@ -27,6 +29,16 @@ func _ready() -> void:
             _demo()
     else:
         _demo()
+    _add_diagnostic_marker()
+    if has_building:
+        player.global_position = first_building_position + Vector3(0, 35, 55)
+        player.rotation.y = 0.0
+        player.pivot.rotation.x = -0.48
+
+func _add_diagnostic_marker() -> void:
+    # Unmistakable geometry in the camera view; verifies mesh rendering.
+    _box(self, player.global_position + Vector3(0, -15, -25), Vector3(12, 30, 12), Color(1, 0.05, 0.05), true)
+    print("EARTH EXPLORER: diagnostic red tower created; first building=", first_building_position, " loaded=", building_count)
 
 func _unhandled_input(event: InputEvent) -> void:
     if event is InputEventKey and event.pressed and not event.echo:
@@ -140,6 +152,9 @@ func _building(points: Array[Vector3], height: float) -> void:
     # Wall geometry is robust for concave footprints; roofing comes later.
     for i in range(points.size()):
         _segment(points[i], points[(i + 1) % points.size()], height * 0.5, 0.22, Color(0.78, 0.75, 0.69), true)
+    if not has_building:
+        first_building_position = points[0]
+        has_building = true
     building_count += 1
 
 func _demo() -> void:
