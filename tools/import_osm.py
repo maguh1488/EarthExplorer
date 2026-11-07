@@ -12,9 +12,11 @@ import re
 import urllib.parse
 import urllib.request
 import urllib.error
-import time
 import sys
 from pathlib import Path
+import xml.etree.ElementTree as ET
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_BBOX = (54.3208, 10.1359, 54.3258, 10.1429)  # south, west, north, east
 OVERPASS_SERVERS = ("https://overpass.kumi.systems/api/interpreter", "https://overpass-api.de/api/interpreter", "https://overpass.nchc.org.tw/api/interpreter")
@@ -43,6 +45,25 @@ def convert_osm(raw: dict) -> dict:
         elif "highway" in tags and len(coords) >= 2:
             roads.append({"id": way["id"], "type": tags["highway"], "points": coords})
     return {"attribution": "© OpenStreetMap contributors, ODbL", "buildings": buildings, "roads": roads}
+
+def import_xml(path: Path) -> dict:
+    """Read a small OSM XML export without extra dependencies."""
+    nodes = {}
+    ways = []
+    for _event, elem in ET.iterparse(path, events=("end",)):
+        if elem.tag == "node":
+            nodes[int(elem.attrib["id"])] = [float(elem.attrib["lon"]), float(elem.attrib["lat"])]
+            elem.clear()
+        elif elem.tag == "way":
+            tags = {t.attrib["k"]: t.attrib["v"] for t in elem.findall("tag")}
+            if "building" in tags or "highway" in tags:
+                ways.append({"type": "way", "id": int(elem.attrib["id"]),
+                             "nodes": [int(n.attrib["ref"]) for n in elem.findall("nd")],
+                             "tags": tags})
+            elem.clear()
+    elements = [{"type": "node", "id": node_id, "lon": pos[0], "lat": pos[1]}
+                for node_id, pos in nodes.items()]
+    return {"elements": elements + ways}
 
 def import_bbox(bbox: tuple[float, float, float, float]) -> dict:
     south, west, north, east = bbox
@@ -75,11 +96,11 @@ def import_bbox(bbox: tuple[float, float, float, float]) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Download small Kiel OSM region for Earth Explorer")
     parser.add_argument("--bbox", type=float, nargs=4, default=DEFAULT_BBOX, metavar=("S", "W", "N", "E"))
-    parser.add_argument("--output", type=Path, default=Path("data/kiel/osm.json"))
-    parser.add_argument("--input", type=Path, help="Read an existing Overpass JSON instead of downloading")
+    parser.add_argument("--output", type=Path, default=PROJECT_ROOT / "data/kiel/osm.json")
+    parser.add_argument("--input", type=Path, help="Read an existing Overpass JSON or .osm XML export instead of downloading")
     args = parser.parse_args()
     try:
-        source = json.loads(args.input.read_text(encoding="utf-8")) if args.input else import_bbox(tuple(args.bbox))
+        source = (import_xml(args.input) if args.input.suffix.lower() == ".osm" else json.loads(args.input.read_text(encoding="utf-8"))) if args.input else import_bbox(tuple(args.bbox))
         result = convert_osm(source)
         if not result["buildings"] and not result["roads"]:
             raise ValueError("No buildings or roads found; existing data preserved")
@@ -88,7 +109,7 @@ def main() -> None:
         temp.write_text(json.dumps(result, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
         temp.replace(args.output)
         print(f"Saved {len(result['buildings'])} buildings and {len(result['roads'])} roads to {args.output}")
-    except (RuntimeError, ValueError, OSError, json.JSONDecodeError) as exc:
+    except (RuntimeError, ValueError, OSError, ET.ParseError) as exc:
         print(f"Import failed: {exc}. Existing data preserved.", file=sys.stderr)
         sys.exit(1)
 
