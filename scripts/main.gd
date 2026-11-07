@@ -20,6 +20,8 @@ const VISIBLE_RADIUS := 2
 var chunk_nodes: Dictionary = {}
 var last_chunk := Vector2i(999999, 999999)
 var visible_chunks := 0
+var terrain_loaded := false
+const TERRAIN_FILE := "res://data/kiel/terrain.json"
 
 func _ready() -> void:
     _setup_lighting()
@@ -66,7 +68,7 @@ func _process(_delta: float) -> void:
         var p := player.global_position
         var lat := ORIGIN_LAT - p.z / METERS_PER_DEGREE
         var lon := ORIGIN_LON + p.x / (METERS_PER_DEGREE * cos(deg_to_rad(ORIGIN_LAT)))
-        hud.text = "EARTH EXPLORER 0.1 | %s\nFPS %d   Buildings %d   Roofs %d   Roads %d   Chunks %d/%d\nXYZ %.1f / %.1f / %.1f m\nGPS %.6f, %.6f\n%s\nWASD move · Mouse look · Shift fast · F fly/walk · Q/E altitude · Space jump/up · F3 HUD · Home reset · Wheel speed · F11 fullscreen · Esc mouse" % [source_label, Engine.get_frames_per_second(), building_count, roof_count, road_count, visible_chunks, chunk_nodes.size(), p.x, p.y, p.z, lat, lon, "FLY MODE" if player.flying else "WALK MODE"]
+        hud.text = "EARTH EXPLORER 0.1 | %s\nFPS %d   Buildings %d   Roofs %d   Roads %d   Chunks %d/%d\nXYZ %.1f / %.1f / %.1f m\nGPS %.6f, %.6f\n%s\nWASD move · Mouse look · Shift fast · F fly/walk · Q/E altitude · Space jump/up · F3 HUD · Home reset · Wheel speed · F11 fullscreen · Esc mouse" % [source_label, Engine.get_frames_per_second(), building_count, roof_count, road_count, visible_chunks, chunk_nodes.size(), "GRID" if terrain_loaded else "FLAT", p.x, p.y, p.z, lat, lon, "FLY MODE" if player.flying else "WALK MODE"]
 
 func _geo(lon: float, lat: float) -> Vector3:
     return Vector3((lon - ORIGIN_LON) * METERS_PER_DEGREE * cos(deg_to_rad(ORIGIN_LAT)), 0.0, -(lat - ORIGIN_LAT) * METERS_PER_DEGREE)
@@ -116,6 +118,9 @@ func _update_chunks(force := false) -> void:
         var enabled: bool = maxi(abs(id.x - current.x), abs(id.y - current.y)) <= VISIBLE_RADIUS
         var node: Node3D = chunk_nodes[id]
         node.visible = enabled
+        for child in node.get_children():
+            for body in child.find_children("*", "StaticBody3D", true, false):
+                body.process_mode = Node.PROCESS_MODE_INHERIT if enabled else Node.PROCESS_MODE_DISABLED
         if enabled:
             visible_chunks += 1
 
@@ -143,10 +148,55 @@ func _box(parent: Node3D, center: Vector3, size: Vector3, color: Color, collisio
         body.add_child(shape)
 
 func _create_ground() -> void:
+    if FileAccess.file_exists(TERRAIN_FILE):
+        var data = JSON.parse_string(FileAccess.get_file_as_string(TERRAIN_FILE))
+        if data is Dictionary and _create_height_terrain(data):
+            terrain_loaded = true
+            return
+        push_warning("Terrain file invalid; falling back to flat ground")
     var ground := Node3D.new()
     ground.name = "PermanentGround"
     add_child(ground)
     _box(ground, Vector3(0, -0.5, 0), Vector3(1800, 1, 1800), Color(0.3, 0.47, 0.31), true)
+
+func _create_height_terrain(data: Dictionary) -> bool:
+    # Local regular height grid in metres, centred at Godot origin.
+    var width := int(data.get("width", 0))
+    var depth := int(data.get("depth", 0))
+    var step := float(data.get("step_m", 0.0))
+    var heights: Array = data.get("heights", [])
+    if width < 2 or depth < 2 or width > 513 or depth > 513 or step <= 0.0 or heights.size() != width * depth:
+        return false
+    var vertices := PackedVector3Array()
+    var indices := PackedInt32Array()
+    var normals := PackedVector3Array()
+    for z in range(depth):
+        for x in range(width):
+            var px := (float(x) - float(width - 1) * 0.5) * step
+            var pz := (float(z) - float(depth - 1) * 0.5) * step
+            vertices.append(Vector3(px, float(heights[z * width + x]), pz))
+    for z in range(depth - 1):
+        for x in range(width - 1):
+            var i := z * width + x
+            indices.append_array(PackedInt32Array([i, i + width, i + 1, i + 1, i + width, i + width + 1]))
+    var arrays := []
+    arrays.resize(Mesh.ARRAY_MAX)
+    arrays[Mesh.ARRAY_VERTEX] = vertices
+    arrays[Mesh.ARRAY_INDEX] = indices
+    var mesh := ArrayMesh.new()
+    mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+    var ground := StaticBody3D.new()
+    ground.name = "HeightTerrain"
+    add_child(ground)
+    var visual := MeshInstance3D.new()
+    visual.mesh = mesh
+    visual.material_override = _material(Color(0.29, 0.49, 0.31))
+    visual.material_override.cull_mode = BaseMaterial3D.CULL_DISABLED
+    ground.add_child(visual)
+    var collision := CollisionShape3D.new()
+    collision.shape = mesh.create_trimesh_shape()
+    ground.add_child(collision)
+    return true
 
 func _create_player() -> void:
     player = CharacterBody3D.new()
